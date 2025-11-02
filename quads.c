@@ -119,10 +119,6 @@ int main(int argc, char *argv[]) {
         rect.x = halfW; rect.y = halfH; rect.w = w - halfW; rect.h = h - halfH;
         SDL_RenderFillRect(ren, &rect);
 
-        // thin black separator lines (optional)
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);  // black divider
-        SDL_RenderDrawLine(ren, halfW, 0, halfW, h);     // vertical
-        SDL_RenderDrawLine(ren, 0, halfH, w, halfH);     // horizontal
         SDL_RenderPresent(ren);
         // ------------------
     }
