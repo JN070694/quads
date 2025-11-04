@@ -1,23 +1,28 @@
 /*
  * quads.c
  * Full-screen 4-quadrant clicker
- * 1,2,3,4 (numpad) -> green
+ * 1,2,3,4 (numpad or number row) -> set quadrant color
+ * Space -> reset all to black
  * Esc -> exit full-screen & quit
+ * Mouse cursor is hidden while running
  */
-
 #include <SDL2/SDL.h>
 #include <stdbool.h>
 #include <stdio.h>
 
-#define SCREEN_WIDTH  0   // 0 = use current display width
-#define SCREEN_HEIGHT 0   // 0 = use current display height
+#define SCREEN_WIDTH  0  // 0 = use current display width
+#define SCREEN_HEIGHT 0  // 0 = use current display height
 
 typedef enum {
-    Q1 = 0,   // top-left
-    Q2,       // top-right
-    Q3,       // bottom-left
-    Q4        // bottom-right
+    Q1 = 0, // top-left     -> Red
+    Q2,     // top-right    -> White
+    Q3,     // bottom-left  -> Blue
+    Q4      // bottom-right -> Green
 } Quad;
+
+// Helper macro: set color to (r,g,b) when active, else black
+#define SET_COLOR(q, r, g, b) \
+SDL_SetRenderDrawColor(ren, active[q] ? (r) : 0, active[q] ? (g) : 0, active[q] ? (b) : 0, 255)
 
 int main(int argc, char *argv[]) {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -25,13 +30,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // Get current display mode to compute real size
+    // Prevent window minimize flicker
+    SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0");
+
     SDL_DisplayMode dm;
-    SDL_GetCurrentDisplayMode(0, &dm);
-    int w = (SCREEN_WIDTH  > 0) ? SCREEN_WIDTH  : dm.w;
+    if (SDL_GetCurrentDisplayMode(0, &dm) != 0) {
+        fprintf(stderr, "SDL_GetCurrentDisplayMode Error: %s\n", SDL_GetError());
+        SDL_Quit();
+        return 1;
+    }
+
+    int w = (SCREEN_WIDTH > 0) ? SCREEN_WIDTH : dm.w;
     int h = (SCREEN_HEIGHT > 0) ? SCREEN_HEIGHT : dm.h;
 
-    // Fullscreen window
     SDL_Window *win = SDL_CreateWindow(
         "4-Quadrant Clicker",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
@@ -44,18 +55,20 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    SDL_ShowCursor(SDL_DISABLE); // Hide cursor immediately
+
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+                                           SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!ren) {
         fprintf(stderr, "SDL_CreateRenderer Error: %s\n", SDL_GetError());
         SDL_DestroyWindow(win);
+        SDL_ShowCursor(SDL_ENABLE);
         SDL_Quit();
         return 1;
     }
 
-    // State: which quadrants are green?
-    bool green[4] = {false, false, false, false};
-
+    // All quadrants start inactive (black)
+    bool active[4] = {false};
     bool quit = false;
     SDL_Event e;
 
@@ -70,61 +83,50 @@ int main(int argc, char *argv[]) {
                         quit = true;
                         break;
                     case SDLK_SPACE:
-                        green[Q1] = false;
-                        green[Q2] = false;
-                        green[Q3] = false;
-                        green[Q4] = false;
+                        for (int i = 0; i < 4; i++) active[i] = false;
                         break;
-                        // Numeric keypad keys
-                    case SDLK_KP_1: green[Q1] = true; break; // top-left
-                    case SDLK_KP_2: green[Q2] = true; break; // top-right
-                    case SDLK_KP_3: green[Q3] = true; break; // bottom-left
-                    case SDLK_KP_4: green[Q4] = true; break; // bottom-right
-                    // Fallback for normal number row
-                    case SDLK_1: green[Q1] = true; break;
-                    case SDLK_2: green[Q2] = true; break;
-                    case SDLK_3: green[Q3] = true; break;
-                    case SDLK_4: green[Q4] = true; break;
+                    case SDLK_KP_1: case SDLK_1: active[Q1] = true; break;
+                    case SDLK_KP_2: case SDLK_2: active[Q2] = true; break;
+                    case SDLK_KP_3: case SDLK_3: active[Q3] = true; break;
+                    case SDLK_KP_4: case SDLK_4: active[Q4] = true; break;
                 }
             }
         }
 
         // ----- Render -----
-        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);   // black background
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
         SDL_RenderClear(ren);
 
         int halfW = w / 2;
         int halfH = h / 2;
-
-        // Helper to draw a quad
         SDL_Rect rect;
 
-        if (green[Q1]) SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
-        else           SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        rect.x = 0; rect.y = 0; rect.w = halfW; rect.h = halfH;
+        // Q1: Top-left -> Red
+        SET_COLOR(Q1, 255, 0, 0);
+        rect = (SDL_Rect){0, 0, halfW, halfH};
         SDL_RenderFillRect(ren, &rect);
 
-        if (green[Q2]) SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
-        else           SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        rect.x = halfW; rect.y = 0; rect.w = w - halfW; rect.h = halfH;
+        // Q2: Top-right -> White
+        SET_COLOR(Q2, 255, 255, 255);
+        rect = (SDL_Rect){halfW, 0, w - halfW, halfH};
         SDL_RenderFillRect(ren, &rect);
 
-        if (green[Q3]) SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
-        else           SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        rect.x = 0; rect.y = halfH; rect.w = halfW; rect.h = h - halfH;
+        // Q3: Bottom-left -> Blue
+        SET_COLOR(Q3, 0, 0, 255);
+        rect = (SDL_Rect){0, halfH, halfW, h - halfH};
         SDL_RenderFillRect(ren, &rect);
 
-        if (green[Q4]) SDL_SetRenderDrawColor(ren, 0, 255, 0, 255);
-        else           SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
-        rect.x = halfW; rect.y = halfH; rect.w = w - halfW; rect.h = h - halfH;
+        // Q4: Bottom-right -> Green
+        SET_COLOR(Q4, 0, 255, 0);
+        rect = (SDL_Rect){halfW, halfH, w - halfW, h - halfH};
         SDL_RenderFillRect(ren, &rect);
 
         SDL_RenderPresent(ren);
-        // ------------------
     }
 
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
+    SDL_ShowCursor(SDL_ENABLE); // Restore cursor
     SDL_Quit();
     return 0;
 }
