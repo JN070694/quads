@@ -1,72 +1,80 @@
 /*
  * Quads-II.c
- * Full-screen line clicker
- * 1,a -> two parallel RED lines, bottom-left to top-right (positive slope)
- * 2,b -> two parallel RED lines, top-left to bottom-right (negative slope)
- * 3,c -> same as 1/a but BLUE
- * 4,d -> same as 2/b but BLUE
- * 5,e -> two parallel flat GREEN lines, centered on screen
- * Any overlap between differently-colored lines turns YELLOW
- * Space -> reset all to BLACK
- * Esc -> exit full-screen & quit
- * Mouse cursor is hidden while running
+ * Windowed (resizable, never full-screen) character display.
+ * Black background, blue lettering.
+ * Any letter/number key -> appends that character (up to 3 shown at once).
+ * Once 3 characters are showing, further key presses are ignored until
+ * Space resets the display back to blank/black.
+ * Esc -> quit
  */
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
+#include <string.h>
 
-#define SCREEN_WIDTH  0
-#define SCREEN_HEIGHT 0
-#define NUM_GROUPS 5
-#define THICK 8
-#define GAP   60
+#define WIN_WIDTH   800
+#define WIN_HEIGHT  600
+#define MAX_CHARS   3
+#define FONT_PTSIZE 180
 
-static Uint32 BLACK, RED, BLUE, GREEN, YELLOW;
+// Common Linux font locations, used as a fallback if no bundled font is
+// found next to the executable (see open_font below).
+static const char *FONT_CANDIDATES[] = {
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    NULL
+};
 
-static inline void plot(Uint32 *px, int w, int h, int x, int y, Uint32 color) {
-    if (x < 0 || x >= w || y < 0 || y >= h) return;
-    Uint32 *p = &px[y * w + x];
-    if (*p == BLACK) *p = color;
-    else if (*p != color) *p = YELLOW;
-}
-
-static void draw_hline(Uint32 *px, int w, int h, int y, Uint32 color) {
-    for (int t = 0; t < THICK; t++)
-        for (int x = 0; x < w; x++)
-            plot(px, w, h, x, y + t, color);
-}
-
-// Diagonal line from (0,0) to (w,h), shifted down by yoffset. A constant
-// vertical shift keeps it exactly parallel to the base diagonal.
-static void draw_diag(Uint32 *px, int w, int h, int yoffset, Uint32 color) {
-    for (int x = 0; x < w; x++) {
-        int y = (int)((long long)x * h / w) + yoffset;
-        for (int t = 0; t < THICK; t++)
-            plot(px, w, h, x, y + t, color);
+static TTF_Font *open_font(int ptsize) {
+    // Prefer a font bundled alongside the executable (AppImage layout:
+    // usr/bin/Quads-II + usr/share/quads-ii/DejaVuSans-Bold.ttf) so the
+    // app doesn't depend on the host system having a particular font.
+    char *base = SDL_GetBasePath(); // e.g. ".../usr/bin/"
+    if (base) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s../share/quads-ii/DejaVuSans-Bold.ttf", base);
+        TTF_Font *f = TTF_OpenFont(path, ptsize);
+        SDL_free(base);
+        if (f) return f;
     }
-}
 
-// Mirror of draw_diag: bottom-left to top-right (positive slope), shifted
-// down by yoffset. Same constant-shift trick keeps parallel lines exact.
-static void draw_diag_mirror(Uint32 *px, int w, int h, int yoffset, Uint32 color) {
-    for (int x = 0; x < w; x++) {
-        int y = h - (int)((long long)x * h / w) + yoffset;
-        for (int t = 0; t < THICK; t++)
-            plot(px, w, h, x, y + t, color);
+    for (int i = 0; FONT_CANDIDATES[i]; i++) {
+        TTF_Font *f = TTF_OpenFont(FONT_CANDIDATES[i], ptsize);
+        if (f) return f;
     }
+    return NULL;
 }
 
-static void rebuild(Uint32 *px, int w, int h, bool *active) {
-    for (int i = 0; i < w * h; i++) px[i] = BLACK;
+// Re-render the current buffer as blue text, centered in the window,
+// and blit it against a black background.
+static void render_frame(SDL_Renderer *ren, TTF_Font *font, const char *buf) {
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
 
-    int gap = (h < GAP * 3) ? h / 4 : GAP;
+    if (buf[0] != '\0') {
+        SDL_Color blue = {0, 0, 255, 255};
+        SDL_Surface *surf = TTF_RenderText_Blended(font, buf, blue);
+        if (surf) {
+            SDL_Texture *tex = SDL_CreateTextureFromSurface(ren, surf);
+            if (tex) {
+                int win_w, win_h;
+                SDL_GetRendererOutputSize(ren, &win_w, &win_h);
+                SDL_Rect dst;
+                dst.w = surf->w;
+                dst.h = surf->h;
+                dst.x = (win_w - dst.w) / 2;
+                dst.y = (win_h - dst.h) / 2;
+                SDL_RenderCopy(ren, tex, NULL, &dst);
+                SDL_DestroyTexture(tex);
+            }
+            SDL_FreeSurface(surf);
+        }
+    }
 
-    if (active[0]) { draw_diag_mirror(px, w, h, 0, RED);   draw_diag_mirror(px, w, h, gap, RED); }
-    if (active[1]) { draw_diag(px, w, h, 0, RED);          draw_diag(px, w, h, gap, RED); }
-    if (active[2]) { draw_diag_mirror(px, w, h, 0, BLUE);  draw_diag_mirror(px, w, h, gap, BLUE); }
-    if (active[3]) { draw_diag(px, w, h, 0, BLUE);         draw_diag(px, w, h, gap, BLUE); }
-    if (active[4]) { draw_hline(px, w, h, h / 2 - gap / 2, GREEN); draw_hline(px, w, h, h / 2 + gap / 2, GREEN); }
+    SDL_RenderPresent(ren);
 }
 
 int main(void) {
@@ -75,74 +83,52 @@ int main(void) {
         return 1;
     }
 
-    SDL_SetHint(SDL_HINT_VIDEO_MINIMIZE_ON_FOCUS_LOSS, "0"); // no minimize flicker
-
-    SDL_DisplayMode dm;
-    if (SDL_GetCurrentDisplayMode(0, &dm) != 0) {
-        fprintf(stderr, "SDL_GetCurrentDisplayMode Error: %s\n", SDL_GetError());
+    if (TTF_Init() != 0) {
+        fprintf(stderr, "TTF_Init Error: %s\n", TTF_GetError());
         SDL_Quit();
         return 1;
     }
 
-    int w = (SCREEN_WIDTH > 0) ? SCREEN_WIDTH : dm.w;
-    int h = (SCREEN_HEIGHT > 0) ? SCREEN_HEIGHT : dm.h;
-
+    // Windowed, resizable, and maximizable -- but SDL_WINDOW_RESIZABLE
+    // alone never goes full-screen, so the desktop, taskbar, and other
+    // windows stay reachable and the app is trivial to re-open later.
     SDL_Window *win = SDL_CreateWindow(
         "Quads-II",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-        w, h,
-        SDL_WINDOW_FULLSCREEN_DESKTOP
+        WIN_WIDTH, WIN_HEIGHT,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN
     );
     if (!win) {
         fprintf(stderr, "SDL_CreateWindow Error: %s\n", SDL_GetError());
+        TTF_Quit();
         SDL_Quit();
         return 1;
     }
-
-    SDL_ShowCursor(SDL_DISABLE);
 
     SDL_Renderer *ren = SDL_CreateRenderer(win, -1,
                                            SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!ren) {
         fprintf(stderr, "SDL_CreateRenderer Error: %s\n", SDL_GetError());
         SDL_DestroyWindow(win);
-        SDL_ShowCursor(SDL_ENABLE);
+        TTF_Quit();
         SDL_Quit();
         return 1;
     }
 
-    SDL_PixelFormat *fmt = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA32);
-    BLACK  = SDL_MapRGBA(fmt, 0,   0,   0,   255);
-    RED    = SDL_MapRGBA(fmt, 255, 0,   0,   255);
-    BLUE   = SDL_MapRGBA(fmt, 0,   0,   255, 255);
-    GREEN  = SDL_MapRGBA(fmt, 0,   255, 0,   255);
-    YELLOW = SDL_MapRGBA(fmt, 255, 255, 0,   255);
-    SDL_FreeFormat(fmt);
-
-    SDL_Texture *canvas = SDL_CreateTexture(ren, SDL_PIXELFORMAT_RGBA32,
-                                             SDL_TEXTUREACCESS_STREAMING, w, h);
-    if (!canvas) {
-        fprintf(stderr, "SDL_CreateTexture Error: %s\n", SDL_GetError());
+    TTF_Font *font = open_font(FONT_PTSIZE);
+    if (!font) {
+        fprintf(stderr, "Could not find a usable font. Set one of the paths in "
+                        "FONT_CANDIDATES to a .ttf file on this system.\n");
         SDL_DestroyRenderer(ren);
         SDL_DestroyWindow(win);
-        SDL_ShowCursor(SDL_ENABLE);
+        TTF_Quit();
         SDL_Quit();
         return 1;
     }
 
-    Uint32 *pixels = malloc((size_t)w * h * sizeof(Uint32));
-    if (!pixels) {
-        fprintf(stderr, "Out of memory\n");
-        SDL_DestroyTexture(canvas);
-        SDL_DestroyRenderer(ren);
-        SDL_DestroyWindow(win);
-        SDL_ShowCursor(SDL_ENABLE);
-        SDL_Quit();
-        return 1;
-    }
-
-    bool active[NUM_GROUPS] = {false};
-    bool dirty = true; // draw the initial (blank) frame once
+    char buf[MAX_CHARS + 1] = {0};
+    int len = 0;
+    bool dirty = true;
     bool quit = false;
     SDL_Event e;
 
@@ -150,40 +136,44 @@ int main(void) {
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) {
                 quit = true;
+            } else if (e.type == SDL_WINDOWEVENT &&
+                       (e.window.event == SDL_WINDOWEVENT_RESIZED ||
+                        e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+                        e.window.event == SDL_WINDOWEVENT_EXPOSED)) {
+                dirty = true;
             } else if (e.type == SDL_KEYDOWN) {
-                switch (e.key.keysym.sym) {
-                    case SDLK_ESCAPE: quit = true; break;
-                    case SDLK_SPACE:
-                        for (int i = 0; i < NUM_GROUPS; i++) active[i] = false;
-                        dirty = true;
-                        break;
-                    case SDLK_KP_1: case SDLK_1: case SDLK_a: active[0] = true; dirty = true; break;
-                    case SDLK_KP_2: case SDLK_2: case SDLK_b: active[1] = true; dirty = true; break;
-                    case SDLK_KP_3: case SDLK_3: case SDLK_c: active[2] = true; dirty = true; break;
-                    case SDLK_KP_4: case SDLK_4: case SDLK_d: active[3] = true; dirty = true; break;
-                    case SDLK_KP_5: case SDLK_5: case SDLK_e: active[4] = true; dirty = true; break;
+                SDL_Keycode key = e.key.keysym.sym;
+
+                if (key == SDLK_ESCAPE) {
+                    quit = true;
+                } else if (key == SDLK_SPACE) {
+                    len = 0;
+                    buf[0] = '\0';
+                    dirty = true;
+                } else if (len < MAX_CHARS &&
+                           ((key >= SDLK_a && key <= SDLK_z) ||
+                            (key >= SDLK_0 && key <= SDLK_9))) {
+                    buf[len++] = (char)SDL_toupper((int)key);
+                    buf[len] = '\0';
+                    dirty = true;
                 }
+                // If len == MAX_CHARS already, non-space keys are ignored
+                // until Space resets the buffer.
             }
         }
 
-        // Only rebuild the pixel buffer when the active set actually
-        // changes, then just re-blit the cached texture every frame.
         if (dirty) {
-            rebuild(pixels, w, h, active);
-            SDL_UpdateTexture(canvas, NULL, pixels, w * (int)sizeof(Uint32));
+            render_frame(ren, font, buf);
             dirty = false;
+        } else {
+            SDL_Delay(10);
         }
-
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, canvas, NULL, NULL);
-        SDL_RenderPresent(ren);
     }
 
-    free(pixels);
-    SDL_DestroyTexture(canvas);
+    TTF_CloseFont(font);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
-    SDL_ShowCursor(SDL_ENABLE);
+    TTF_Quit();
     SDL_Quit();
     return 0;
 }
